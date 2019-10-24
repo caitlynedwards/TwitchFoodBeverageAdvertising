@@ -1,0 +1,1763 @@
+---
+title: "Twitch Analysis"
+author: "Last Updated by: Catherine Pollack"
+date: "Last Updated: 10/23/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Bring in Libraries
+```{r}
+library(stringr)
+library(tidyverse)
+library(ggsci)
+library(viridis)
+library(ggpubr)
+library(grid)
+library(gridExtra)
+library(lmerTest)
+library(zoo)
+library(scales)
+```
+
+# Read in data
+```{r}
+setwd("~/Documents/Dartmouth/Research/Twitch/Data")
+dat_titles <- read.csv("Jan18July22_StreamTitles.csv")
+dat_panels <- read.csv("updated_streamhatchet.csv")
+dat <- rbind(read.csv("July01_17ChatLogs.csv"), read.csv("July17_22ChatLogs.csv"))
+brands <- read.csv("190721_BrandList.csv")
+```
+
+## Remove words that were decided not to match
+```{r}
+remove_words <- c("Special K", "SpecialK", "Respawn", "Trix", "Lays", "Lays%20", "Quaker", "Lays ", "Jif", "Ritz", "Dole", "Rits", "Dannon", "Kashi", "Kashi%20", "Kashi ", "Kraft", "Sheila%20G", "SheilaG", "Shelia #G", "Hi-C", "Hi%20C", "Hi C", "HiC", "Milky%20Way", "Milky Way", "Milkyway", "Sunny%20D", "Sunny D", "SunnyD", "M&M", "MandM%27s", "MandM's", "MandM’s", "MandM%E2%80%99s", "MandMs", "M%26M%27s", "M&M's", "M%26M%E2%80%99s", "M&M’s", "M%26Ms", "M&Ms", "SoBe", "IBC", "Nestea", "Tazo", "Taso", "Sprite", "Goya", "Langers", "7UP", "Lipton", "Patron", "Patr%C3%B3n", "Shasta", "Guinness", "Baileys", "Smirnoff", "Patrón", "Belvedere", "Warsteiner", "Bacardi", "Southern Comfort", "Southern%20Comfort", "SouthernComfort", "Starr", "L&M", "LandM", "L%26M", "Haus", "Kool", "VUSE", "Stokers", "Stoker’s", "Stoker%E2%80%99s", "Stoker's", "Stoker%27s", "Stokers ", "Stokers%20", "Stoker%E2%80%99s%20", "Stoker’s", "Stoker's ", "Stoker%27s%20", "Kodiak", "Newport", "Redman", "White Owl", "WhiteOwl", "White%20Owl", "Backwoods", "NJOY", "Marketen", "Marketen%20", "Marketen ", "Middleton's", "Middletons", "Middleton’s", "Middleton%27s", "Middleton%E2%80%99s", "Red Seal", "RedSeal", "Red%20Seal", "Swisher", "Green%20Smoke", "GreenSmoke", "Green Smoke", "Beech-nut", "Beech%20nut", "Beechnut", "Dutch%20Masters", "DutchMasters", "Blu%20Ecigs", "BluEcigs", "Dutch Masters")
+dat <- filter(dat, !(Word %in% remove_words))
+dat_panels <- filter(dat_panels, !(query %in% remove_words))
+dat_titles <- filter(dat_titles, !(Word %in% remove_words))
+```
+
+# Count number of brands searched
+```{r}
+distinct(brands) %>% 
+  filter(category != "Alcohol" & category != "Other" & category != "Tobacco & ECigarettes") %>%
+  group_by(category) %>%
+  summarise(n_distinct(Word))
+```
+
+# Part 1. Chats
+
+## Replace weird punctuation with normal one
+```{r}
+dat$Word <- dat$Word %>% str_replace_all(c("%20" = "", "%27|%E2%80%99" = "", "%26" = "and",
+                                           "%C3%B3" = "o", "z" = "s", "-" = "", 
+                                           "ArisonaTea" = "ArisonaIcedTea", 
+                                           "Chickfil-A" = "ChickfilA", 
+                                           "CocaCola" = "Coke", 
+                                           "McDs" = "McDonalds", 
+                                           "MtnDew" = "MountainDew", 
+                                           "Oreos" = "Oreo", 
+                                           "Twisslers" = "Twiszlers", 
+                                           "Ubr" = "Ubereats", 
+                                           "Kelloggs" = "Kellogg", 
+                                           "Gfuel" = "GamerFuel", 
+                                           "AMPEnergy" = "MountainDew",
+                                           "GameFuel" = "MountainDew")
+                                           ) #Replaces space and apostraphe to nothing, ampersand with and, accented o with normal o, z to s, hyphen with nothing. Manually fix rest.
+```
+
+## Adding in categories
+```{r}
+dat <- left_join(dat, brands, by = "Word")
+```
+
+## Combine brands that were duplicated due to spelling and calculate summary statistics
+```{r}
+dat$Word <- as.factor(dat$Word) #Changes word category to a factor
+dat_aggregate <- dat %>%
+  group_by(Word, category) %>% #Group by word (in case there are multiple spellings) and category
+  summarise(Aggregate_Messages = sum(Total.Messages), #Aggregate measures across misspellings
+          Aggregate_Views = sum(Total.Views),
+          Aggregate_Unique_Streamers = sum(Unique.Streamers),
+          Aggregate_Unique_Users = sum(Unique.Users),
+          Views_per_Message = Aggregate_Views/Aggregate_Messages)
+```
+
+## Removes any brands that got no hits
+```{r}
+dat_aggregate <- filter(dat_aggregate, Aggregate_Messages > 0) 
+```
+
+## Extract individual categories
+```{r}
+snacks <- filter(dat_aggregate, category == "Processed Snacks")
+beverages <- filter(dat_aggregate, category == "Sugar-Sweetened Beverages")
+restaurants <- filter(dat_aggregate, category == "Restaurants")
+candies <- filter(dat_aggregate, category == "Candies")
+energydrinks <- filter(dat_aggregate, category == "Caffeinated and Energy Drinks")
+```
+
+## Top Five in Each Categories by Messages
+```{r}
+categories <- c("snacks", "beverages", "restaurants", "candies", "energydrinks")
+
+for (i in categories) { #For each category listed above
+  temp <- get(i) %>% #Pull actual value associated with it
+    arrange(desc(Aggregate_Messages)) %>% #Put aggregated messages in descending order
+    head(5) #Pull top five
+  temp$Word <- as.character(temp$Word) #Change word to character
+  assign(paste(i, "_top5", sep = ""), temp) #Output data set
+}
+
+```
+
+## Top Five in Each Categories by Views
+```{r}
+for (i in categories) { #Same as above but with views
+  temp <- get(i) %>%
+    arrange(desc(Aggregate_Views)) %>%
+    head(5)
+  temp$Word <- as.character(temp$Word)
+  assign(paste(i, "_top5_views", sep = ""), temp)
+}
+
+```
+
+## Renaming words for graphs
+```{r}
+beverages_top5[c(1:3,5),1] <- c("Coca-Cola", "Kool-Aid", "A&W", "Dr. Pepper")
+energydrinks_top5[,1] <- c("Gamer Fuel", "Mountain Dew", "Red Bull", "5-hour Energy", "Monster Energy")
+candies_top5[1:2,1] <- c("Reese's", "Kit-Kat")
+restaurants_top5[c(1:3, 5),1] <- c("McDonald's", "Taco Bell", "Chick-fil-A", "Domino's")
+
+beverages_top5_views[1:4,1] <- c("Coca-Cola", "Dr. Pepper", "A&W", "Kool-Aid")
+energydrinks_top5_views[1:5,1] <- c("Gamer Fuel", "Mountain Dew", "Red Bull", "Madrinas Coffee", "Monster Energy")
+candies_top5_views[c(1, 3:4),1] <- c("Reese's", "Hershey's", "Kit-Kat")
+restaurants_top5_views[c(1:3, 5),1] <- c("McDonald's", "UberEats", "Chick-fil-A", "Taco Bell")
+
+```
+
+## Remove "Other", ECig, and Alcohol
+```{r}
+dat_aggregate <- filter(dat_aggregate, category != "Other" & category != "Alcohol" & category != "Tobacco & ECigarettes")
+dat_aggregate$category <- droplevels(dat_aggregate$category)
+```
+
+
+## Total and Average Messages and Views
+```{r}
+dat_aggregate_total <- dat_aggregate %>%
+  group_by(category) %>%
+  summarise(total_messages = sum(Aggregate_Messages, na.rm = TRUE),
+         average_messages = mean(Aggregate_Messages, na.rm = TRUE),
+         total_views = sum(Aggregate_Views, na.rm = TRUE),
+         average_views = mean(Aggregate_Views, na.rm = TRUE))
+```
+
+## Rename Categories and Change back to Factor
+```{r}
+dat_aggregate_total$category_char <- as.character(dat_aggregate_total$category)
+dat_aggregate_total$category_char[which(dat_aggregate_total$category_char == "Caffeinated and Energy Drinks")] <- "Energy Drinks,\nCoffees, and Teas"
+dat_aggregate_total$category_char[which(dat_aggregate_total$category_char == "Sugar-Sweetened Beverages")] <- "Sodas and Other \nSugar Sweetened \nBeverages"
+dat_aggregate_total$category_char[which(dat_aggregate_total$category_char == "Restaurants")] <- "Restaurants and\nFood Delivery Services"
+
+dat_aggregate_total$categories_factor <- as.factor(dat_aggregate_total$category_char)
+dat_aggregate_total$categories_factor <- factor(dat_aggregate_total$categories_factor, levels = c("Energy Drinks,\nCoffees, and Teas", "Restaurants and\nFood Delivery Services", "Processed Snacks", "Sodas and Other \nSugar Sweetened \nBeverages", "Candies"))
+
+```
+
+## Aggregate Figures
+```{r}
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="191004_ChatsTopMessages.svg", 
+    width=5.75, 
+    height=2.25, 
+    pointsize=8)
+ggplot(data = dat_aggregate_total, aes(x = reorder(categories_factor, -total_messages), y = total_messages, fill = categories_factor)) +
+  geom_bar(stat = "identity", add = "mean_se") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 6), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "none") +
+  scale_y_continuous(labels = comma) +
+  xlab("Categories") +
+  ylab("Total Message Counts for July 2019") +
+  scale_fill_jama()
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="191004_ChatsTopViews.svg", 
+    width=5.75, 
+    height=2.25, 
+    pointsize=8)
+ggplot(data = dat_aggregate_total, aes(x = reorder(categories_factor, -total_views), y = total_views, fill = categories_factor)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "none") +
+  scale_y_continuous(labels = comma) +
+  xlab("Categories") +
+  ylab("Total Views for July 2019") +
+  scale_fill_jama()
+dev.off()
+```
+
+## Figures -- Messages
+```{r}
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190820_ChatsTop5Messages_Snacks.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(snacks_top5, aes(x = reorder(Word, -Aggregate_Messages), y = Aggregate_Messages)) +
+  geom_bar(stat = "identity", fill = "#00A1D5FF") +
+  theme_minimal() +
+  ggtitle("Processed Snacks") +
+  xlab("Brands") +
+  ylab("Message Count")  +
+  theme(axis.text.x = element_text(size = 5), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5)) +
+  scale_y_continuous(labels = comma, limits = c(0, 794092))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190820_ChatsTop5Messages_Restaurants.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(restaurants_top5, aes(x = reorder(Word, -Aggregate_Messages), y = Aggregate_Messages)) +
+  geom_bar(stat = "identity", fill = "#DF8F44FF") +
+  theme_minimal() +
+  xlab("Brands")+
+  ggtitle("Restaurants and Food Delivery Services") +
+  ylab("Message Count")  +
+  theme(axis.text.x = element_text(size = 5), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5)) +
+  scale_y_continuous(labels = comma, limits = c(0, 794092))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190820_ChatsTop5Messages_Candies.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(candies_top5, aes(x = reorder(Word, -Aggregate_Messages), y = Aggregate_Messages)) +
+  geom_bar(stat = "identity", fill = "#79AF97FF") +
+  theme_minimal() +
+  xlab("Brands")+
+  ggtitle("Candies") +
+  ylab("Message Count")  +
+  theme(axis.text.x = element_text(size = 5), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5)) +
+  scale_y_continuous(labels = comma, limits = c(0, 794092))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190820_ChatsTop5Messages_EnergyDrinks.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(energydrinks_top5, aes(x = reorder(Word, -Aggregate_Messages), y = Aggregate_Messages)) +
+  geom_bar(stat = "identity", fill = "#374E55FF") +
+  theme_minimal() +
+  xlab("Brands")+
+  ggtitle("Energy Drinks, Coffees, and Teas") +
+  ylab("Message Count")  +
+  theme(axis.text.x = element_text(size = 5), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5)) +
+  scale_y_continuous(labels = comma, limits = c(0, 794092))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190820_ChatsTop5Messages_Beverages.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(beverages_top5, aes(x = reorder(Word, -Aggregate_Messages), y = Aggregate_Messages)) +
+  geom_bar(stat = "identity", fill = "#B24745FF") +
+  theme_minimal() +
+  xlab("Brands")+
+  ggtitle("Sugar Sweetened Beverages") +
+  ylab("Message Count")  +
+  theme(axis.text.x = element_text(size = 5), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5)) +
+  scale_y_continuous(labels = comma, limits = c(0, 794092))
+dev.off()
+```
+
+## Figures -- Views
+```{r}
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190820_ChatsTop5Views_Snacks.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(snacks_top5_views, aes(x = reorder(Word, -Aggregate_Views), y = Aggregate_Views)) +
+  geom_bar(stat = "identity", fill = "#00A1D5FF") +
+  theme_minimal() +
+  ggtitle("Processed Snacks") +
+  xlab("Brands") +
+  ylab("Views Count")  +
+  theme(axis.text.x = element_text(size = 5), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5)) +
+  scale_y_continuous(labels = comma, limits = c(0, 1560625932))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190820_ChatsTop5Views_Restaurants.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(restaurants_top5_views, aes(x = reorder(Word, -Aggregate_Views), y = Aggregate_Views)) +
+  geom_bar(stat = "identity", fill = "#DF8F44FF") +
+  theme_minimal() +
+  xlab("Brands")+
+  ggtitle("Restaurants and Food Delivery Services") +
+  ylab("Views Count")  +
+  theme(axis.text.x = element_text(size = 5), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5)) +
+  scale_y_continuous(labels = comma, limits = c(0, 1560625932))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190820_ChatsTop5Views_Candies.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(candies_top5_views, aes(x = reorder(Word, -Aggregate_Views), y = Aggregate_Views)) +
+  geom_bar(stat = "identity", fill = "#79AF97FF") +
+  theme_minimal() +
+  xlab("Brands")+
+  ggtitle("Candies") +
+  ylab("Views Count")  +
+  theme(axis.text.x = element_text(size = 5), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5)) +
+  scale_y_continuous(labels = comma, limits = c(0, 1560625932))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190820_ChatsTop5Views_EnergyDrinks.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(energydrinks_top5_views, aes(x = reorder(Word, -Aggregate_Views), y = Aggregate_Views)) +
+  geom_bar(stat = "identity", fill = "#374E55FF") +
+  theme_minimal() +
+  xlab("Brands")+
+  ggtitle("Energy Drinks, Coffees, and Teas") +
+  ylab("Views Count")  +
+  theme(axis.text.x = element_text(size = 4.25), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5)) +
+  scale_y_continuous(labels = comma, limits = c(0, 1560625932))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190820_ChatsTop5Views_Beverages.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(beverages_top5_views, aes(x = reorder(Word, -Aggregate_Views), y = Aggregate_Views)) +
+  geom_bar(stat = "identity", fill = "#B24745FF") +
+  theme_minimal() +
+  xlab("Brands")+
+  ggtitle("Sugar Sweetened Beverages") +
+  ylab("Views Count")  +
+  theme(axis.text.x = element_text(size = 5), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5)) +
+  scale_y_continuous(labels = comma, limits = c(0, 1560625932))
+dev.off()
+```
+
+## Statistical Tests
+```{r}
+summary(aov(Aggregate_Messages ~ category, data = dat_aggregate))
+TukeyHSD(aov(Aggregate_Messages ~ category, data = dat_aggregate))
+
+summary(aov(Aggregate_Views ~ category, data = dat_aggregate))
+
+summary(aov(Views_per_Message ~ category, data = dat_aggregate))
+TukeyHSD(aov(Views_per_Message ~ category, data = dat_aggregate))
+
+```
+
+
+# Part 2. Panels
+
+## Add word column that matches the formatting of the chat data set and change spellings accordingly
+```{r}
+dat_panels$Word <- "" #Initializes column
+dat_panels$Word <- dat_panels$query %>%
+  str_replace_all(c("-" = "", "'" = "", "z" = "s", "&" = "and", " " = "", "’" = "", "ó" = "o", 
+                    "ArisonaTea" = "ArisonaIcedTea", 
+                    "Chickfil-A" = "ChickfilA", 
+                    "CocaCola" = "Coke", 
+                    "McDs" = "McDonalds", 
+                    "MtnDew" = "MountainDew", 
+                    "Oreos" = "Oreo", 
+                    "Twisslers" = "Twiszlers", 
+                    "Ubr" = "Ubereats", 
+                    "Kelloggs" = "Kellogg", 
+                    "Gfuel" = "GamerFuel", 
+                    "AMPEnergy" = "MountainDew",
+                    "GameFuel" = "MountainDew")) #Removes hyphen or apostraphe
+```
+
+## Merge categories with panels list
+```{r}
+dat_panels$categories <- "" #Initialize category column in panels data set
+brands$Word <- as.character(brands$Word)
+dat_panels$Word <- as.character(dat_panels$Word)
+brands$category <- as.character(brands$category)
+
+for (i in 1:nrow(dat_panels)) { #For each panel search term
+  dat_panels$categories[i] <- ifelse(dat_panels$Word[i] %in% brands$Word, brands$category[which(brands$Word %in% dat_panels$Word[i])[1]], "") #If the word in the panel is in the brand_categories list, pull the list and assign it. 
+}
+
+```
+
+## Combine brands that were duplicated due to spelling and calculate summary statistics
+```{r}
+dat_panels$new_views <- as.character(dat_panels$new_views)
+dat_panels$unique_channels <- as.character(dat_panels$unique_channels)
+dat_panels$hours_watched <- as.character(dat_panels$hours_watched)
+
+dat_panels$new_views <- str_replace_all(dat_panels$new_views, ",", "")
+dat_panels$unique_channels <- str_replace_all(dat_panels$unique_channels, ",", "")
+dat_panels$hours_watched <- str_replace_all(dat_panels$hours_watched, ",", "")
+
+dat_panels$new_views <- as.numeric(dat_panels$new_views)
+dat_panels$unique_channels <- as.numeric(dat_panels$unique_channels)
+dat_panels$hours_watched <- as.numeric(dat_panels$hours_watched)
+
+
+dat_aggregate_panels <- dat_panels %>%
+  group_by(Word, month) %>% #Group by word (in case there are multiple spellings) and category
+  mutate(Aggregate_Views = sum(new_views), #Aggregate measures across spelling variations
+          Aggregate_Unique_Channels = sum(unique_channels),
+          Aggregate_Hours_Watched = sum(hours_watched)) %>%
+  distinct(Word, .keep_all = TRUE)
+```
+
+## Convert month column to actual date
+```{r}
+dat_aggregate_panels <- separate(dat_aggregate_panels,
+                                 col = "month",
+                                 into = c("Month", "Year"),
+                                 sep = " ")
+
+dat_aggregate_panels$Month <- ifelse(dat_aggregate_panels$Month == "January", "01", ifelse(dat_aggregate_panels$Month == "February", "02", ifelse(dat_aggregate_panels$Month == "March", "03", ifelse(dat_aggregate_panels$Month == "April", "04", ifelse(dat_aggregate_panels$Month == "May", "05", ifelse(dat_aggregate_panels$Month == "June", "06", ifelse(dat_aggregate_panels$Month == "July", "07", ifelse(dat_aggregate_panels$Month == "August", "08", ifelse(dat_aggregate_panels$Month == "September", "09", ifelse(dat_aggregate_panels$Month == "October", "10", ifelse(dat_aggregate_panels$Month == "November", "11", "12")))))))))))
+
+dat_aggregate_panels$date <- paste(dat_aggregate_panels$Year, dat_aggregate_panels$Month) %>%
+  str_replace(., " ", "")
+
+```
+
+## Keep only data after January 2018
+```{r}
+dat_aggregate_panels$date <- as.numeric(dat_aggregate_panels$date)
+dat_aggregate_panels <- filter(dat_aggregate_panels, date > 201799 & date < 201908)
+dat_aggregate_panels$date <- as.character(dat_aggregate_panels$date)
+
+```
+
+## Manually adjusting counts based on search
+```{r}
+dat_aggregate_panels$Aggregate_Hours_Watched[which(dat_aggregate_panels$query == "RedBull" & dat_aggregate_panels$Year == "2019" & dat_aggregate_panels$Month == "04")] <- dat_aggregate_panels %>%
+  filter(query == "RedBull" & Year == "2019" & Month == "04") %>%
+  select(Aggregate_Hours_Watched) %>%
+  as.data.frame() %>%
+  .[1,2] + 8519289
+
+dat_aggregate_panels$Aggregate_Unique_Channels[which(dat_aggregate_panels$query == "RedBull" & dat_aggregate_panels$Year == "2019" & dat_aggregate_panels$Month == "04")] <- dat_aggregate_panels %>%
+  filter(query == "RedBull" & Year == "2019" & Month == "04") %>%
+  select(Aggregate_Unique_Channels) %>%
+  as.data.frame() %>%
+  .[1,2] + 1
+
+dat_aggregate_panels$Aggregate_Hours_Watched[which(dat_aggregate_panels$query == "RedBull" & dat_aggregate_panels$Year == "2019" & dat_aggregate_panels$Month == "05")] <- dat_aggregate_panels %>%
+  filter(query == "RedBull" & Year == "2019" & Month == "05") %>%
+  select(Aggregate_Hours_Watched) %>%
+  as.data.frame() %>%
+  .[1,2] + 9622751
+
+dat_aggregate_panels$Aggregate_Unique_Channels[which(dat_aggregate_panels$query == "RedBull" & dat_aggregate_panels$Year == "2019" & dat_aggregate_panels$Month == "05")] <- dat_aggregate_panels %>%
+  filter(query == "RedBull" & Year == "2019" & Month == "05") %>%
+  select(Aggregate_Unique_Channels) %>%
+  as.data.frame() %>%
+  .[1,2] + 1
+
+dat_aggregate_panels$Aggregate_Hours_Watched[which(dat_aggregate_panels$query == "RedBull" & dat_aggregate_panels$Year == "2019" & dat_aggregate_panels$Month == "06")] <- dat_aggregate_panels %>%
+  filter(query == "RedBull" & Year == "2019" & Month == "06") %>%
+  select(Aggregate_Hours_Watched) %>%
+  as.data.frame() %>%
+  .[1,2] + 5111587
+
+dat_aggregate_panels$Aggregate_Unique_Channels[which(dat_aggregate_panels$query == "RedBull" & dat_aggregate_panels$Year == "2019" & dat_aggregate_panels$Month == "06")] <- dat_aggregate_panels %>%
+  filter(query == "RedBull" & Year == "2019" & Month == "06") %>%
+  select(Aggregate_Unique_Channels) %>%
+  as.data.frame() %>%
+  .[1,2] + 1
+
+dat_aggregate_panels$Aggregate_Hours_Watched[which(dat_aggregate_panels$query == "RedBull" & dat_aggregate_panels$Year == "2019" & dat_aggregate_panels$Month == "07")] <- dat_aggregate_panels %>%
+  filter(query == "RedBull" & Year == "2019" & Month == "07") %>%
+  select(Aggregate_Hours_Watched) %>%
+  as.data.frame() %>%
+  .[1,2] + 4152351
+
+dat_aggregate_panels$Aggregate_Unique_Channels[which(dat_aggregate_panels$query == "RedBull" & dat_aggregate_panels$Year == "2019" & dat_aggregate_panels$Month == "07")] <- dat_aggregate_panels %>%
+  filter(query == "RedBull" & Year == "2019" & Month == "07") %>%
+  select(Aggregate_Unique_Channels) %>%
+  as.data.frame() %>%
+  .[1,2] + 1
+
+dat_aggregate_panels$Aggregate_Hours_Watched[which(dat_aggregate_panels$query == "Reese's " & dat_aggregate_panels$Year == "2019" & dat_aggregate_panels$Month == "06")] <- dat_aggregate_panels %>%
+  filter(query == "Reese's " & Year == "2019" & Month == "06") %>%
+  select(Aggregate_Hours_Watched) %>%
+  as.data.frame() %>%
+  .[1,2] + 2177785
+
+dat_aggregate_panels$Aggregate_Unique_Channels[which(dat_aggregate_panels$query == "Reese's " & dat_aggregate_panels$Year == "2019" & dat_aggregate_panels$Month == "06")] <- dat_aggregate_panels %>%
+  filter(query == "Reese's " & Year == "2019" & Month == "06") %>%
+  select(Aggregate_Unique_Channels) %>%
+  as.data.frame() %>%
+  .[1,2] + 1
+
+dat_aggregate_panels$Aggregate_Hours_Watched[which(dat_aggregate_panels$query == "Reese's " & dat_aggregate_panels$Year == "2019" & dat_aggregate_panels$Month == "07")] <- dat_aggregate_panels %>%
+  filter(query == "Reese's " & Year == "2019" & Month == "07") %>%
+  select(Aggregate_Hours_Watched) %>%
+  as.data.frame() %>%
+  .[1,2] + 2176871
+
+dat_aggregate_panels$Aggregate_Unique_Channels[which(dat_aggregate_panels$query == "Reese's " & dat_aggregate_panels$Year == "2019" & dat_aggregate_panels$Month == "07")] <- dat_aggregate_panels %>%
+  filter(query == "Reese's " & Year == "2019" & Month == "07") %>%
+  select(Aggregate_Unique_Channels) %>%
+  as.data.frame() %>%
+  .[1,2] + 1
+
+```
+
+## Extract individual categories
+```{r}
+snacks_panels <- filter(dat_aggregate_panels, categories == "Processed Snacks")
+beverages_panels <- filter(dat_aggregate_panels, categories == "Sugar-Sweetened Beverages")
+restaurants_panels <- filter(dat_aggregate_panels, categories == "Restaurants")
+candies_panels <- filter(dat_aggregate_panels, categories == "Candies")
+energydrinks_panels <- filter(dat_aggregate_panels, categories == "Caffeinated and Energy Drinks")
+```
+
+## Top Five in Each Category by Hours Watched
+```{r}
+categories <- c("snacks_panels", "beverages_panels", "restaurants_panels", "candies_panels", "energydrinks_panels")
+
+for (i in categories) { #For each category listed above
+  temp <- get(i) %>% #Pull the actual category
+    group_by(date) %>% #Compare within dates
+    arrange(date, desc(Aggregate_Hours_Watched)) %>% #Pull aggregated hours watched in descending order
+    filter(row_number() == 1:5) %>% #Pull top five per month
+    select(query, categories, Aggregate_Views, Aggregate_Unique_Channels, Aggregate_Hours_Watched, date) #Only pull columns interested in
+  assign(paste(i, "top5", sep = ""), temp) #Send back out 
+}
+```
+
+## Pull all data points for brands that occur in top five
+```{r}
+categories <- c("snacks_panels", "beverages_panels", "restaurants_panels", "candies_panels", "energydrinks_panels")
+
+for (i in categories) { #For each category listed above
+  temp <- get(i) %>% #Pull the actual category
+    filter(query %in% unique(as.character(get(paste(i, "top5", sep = ""))$query))) %>%
+    select(query, categories, Aggregate_Views, Aggregate_Unique_Channels, Aggregate_Hours_Watched, date) #Only pull columns interested in
+  assign(paste(i, "top5_aggregate"), temp) #Send back out 
+  
+  temp2 <- temp %>%
+    group_by(query) %>%
+    summarise("Total Aggregate Hours" = sum(Aggregate_Hours_Watched),
+              "Average Hours Watched" = mean(Aggregate_Hours_Watched)) %>%
+    arrange(desc(`Total Aggregate Hours`))
+  assign(paste(i, "top_average", sep = ""), temp2)
+}
+```
+
+## Relevel factor so colors go from most hours to least hours
+```{r}
+`snacks_panels top5_aggregate`$query <- droplevels(`snacks_panels top5_aggregate`$query)
+`snacks_panels top5_aggregate`$query <- factor(`snacks_panels top5_aggregate`$query, levels = c("Oreo", "Chex", "Pringles", "Totinos", "Nutella", "Doritos", "Clif", "PopTarts"))
+`snacks_panels top5_aggregate`[which(`snacks_panels top5_aggregate`$Word == "Totinos"),"Word"] <- "Totino's"
+
+`restaurants_panels top5_aggregate`$query <- droplevels(`restaurants_panels top5_aggregate`$query)
+`restaurants_panels top5_aggregate`$query <- factor(`restaurants_panels top5_aggregate`$query, levels = c("GrubHub", "Ubr", "Chipotle", "Taco Bell", "KFC", "Jersey Mike's", "Dominos", "Popeyes", "Jack in the Box", "Starbucks", "Burger King", "Subway"))
+`restaurants_panelstop_average`$query <- as.character(`restaurants_panelstop_average`$query)
+`restaurants_panelstop_average`[which(`restaurants_panelstop_average`$query == "Ubr"),"query"] <- "Ubereats"
+`restaurants_panels top5_aggregate`[which(`restaurants_panels top5_aggregate`$Word == "TacoBell"),"Word"] <- "Taco Bell"
+`restaurants_panels top5_aggregate`$query <- as.character(`restaurants_panels top5_aggregate`$query)
+`restaurants_panels top5_aggregate`[which(`restaurants_panels top5_aggregate`$query == "Ubr"),"query"] <- "Uber Eats"
+`restaurants_panels top5_aggregate`$query <- as.factor(`restaurants_panels top5_aggregate`$query)
+`restaurants_panels top5_aggregate`$query <- factor(`restaurants_panels top5_aggregate`$query, levels = c("GrubHub", "Uber Eats", "Chipotle", "Taco Bell", "KFC", "Jersey Mike's", "Dominos", "Popeyes", "Jack in the Box", "Starbucks", "Burger King", "Subway"))
+
+`candies_panels top5_aggregate`$query <- droplevels(`candies_panels top5_aggregate`$query)
+`candies_panels top5_aggregate`$query <- factor(`candies_panels top5_aggregate`$query, levels = c("Reese's ", "Kit Kat", "Twix", "Hershey's", "Skittles", "Snickers"))
+
+`beverages_panels top5_aggregate`$query <- droplevels(`beverages_panels top5_aggregate`$query)
+`beverages_panels top5_aggregate`$query <- factor(`beverages_panels top5_aggregate`$query, levels = c("Dr Pepper", "Coca-Cola", "Fanta", "Pepsi", "Kool-Aid", "Snapple", "Gatorade", "Pibb", "Nestle"))
+`beverages_panels top5_aggregate`[which(`beverages_panels top5_aggregate`$Word == "DrPepper"),"Word"] <- "Dr Pepper"
+`beverages_panels top5_aggregate`[which(`beverages_panels top5_aggregate`$Word == "Coke"),"Word"] <- "Coca-Cola"
+`beverages_panels top5_aggregate`[which(`beverages_panels top5_aggregate`$Word == "KoolAid"),"Word"] <- "Kool-Aid"
+
+`energydrinks_panels top5_aggregate`$query <- droplevels(`energydrinks_panels top5_aggregate`$query)
+`energydrinks_panels top5_aggregate`$query <- factor(`energydrinks_panels top5_aggregate`$query, levels = c("Gfuel ", "Monster Energy", "Madrinas Coffee", "RedBull", "Mountain Dew"))
+```
+
+## Total and Average Hours, Profiles
+```{r}
+total_hours_panels <- snacks_panels
+for (i in categories[2:length(categories)]) {
+  total_hours_panels <- rbind(total_hours_panels, get(i))
+}
+
+total_hours_panels <- total_hours_panels %>%
+  group_by(categories, date) %>%
+  mutate(total_hours = sum(Aggregate_Hours_Watched, na.rm = TRUE),
+            average_hours = mean(Aggregate_Hours_Watched, na.rm = TRUE))
+
+total_hours_panels$categories <- factor(total_hours_panels$categories, levels = c("Caffeinated and Energy Drinks", "Restaurants", "Processed Snacks", "Sugar-Sweetened Beverages", "Candies"))
+total_hours_panels$categories <- as.character(total_hours_panels$categories)
+total_hours_panels$categories[which(total_hours_panels$categories == "Caffeinated and Energy Drinks")] <- "Energy Drinks, Coffees, and Teas"
+total_hours_panels$categories[which(total_hours_panels$categories == "Restaurants")] <- "Restaurants and Food Delivery Services"
+total_hours_panels$categories[which(total_hours_panels$categories == "Sugar-Sweetened Beverages")] <- "Sodas and Other Sugar Sweetened Beverages"
+
+total_hours_panels$categories <- as.factor(total_hours_panels$categories)
+total_hours_panels$categories <- factor(total_hours_panels$categories, levels = c("Energy Drinks, Coffees, and Teas", "Restaurants and Food Delivery Services", "Processed Snacks", "Sodas and Other Sugar Sweetened Beverages", "Candies"))
+
+
+```
+
+## Percent Increase
+```{r}
+# Processed Snacks
+(11926886-18196506)/18196506 #34% decrease in panels
+
+# Beverages
+(3321069 - 5157393)/5157393 #36% decrease in sugar sweetened beverage panels
+
+#Energy Drinks
+(79171778-33239800)/33239800 #138% increase in energy beverages
+
+# Restaurants
+(39045002-957875)/957875 #3976% increase
+
+#Candies
+(5270758-3016175)/3016175 #75% increase
+
+# Alcohol
+(98775-1589459)/1589459 #94% decrease
+
+#E-Cigarettes
+(37840-9889)/9889 #283% increase
+```
+
+## Convert date to Date
+```{r}
+total_hours_panels$date_date<- as.yearmon(paste(total_hours_panels$Year, total_hours_panels$Month, sep = "-"))
+
+total_hours_panels$date_numeric <- 0
+
+for (i in 1:nrow(total_hours_panels)) {
+  if (total_hours_panels$date[i] == "201801") {
+    total_hours_panels$date_numeric[i] <- 1
+  } else if (total_hours_panels$date[i] == "201802") {
+    total_hours_panels$date_numeric[i] <- 2
+  } else if (total_hours_panels$date[i] == "201803") {
+    total_hours_panels$date_numeric[i] <- 3
+  } else if (total_hours_panels$date[i] == "201804") {
+    total_hours_panels$date_numeric[i] <- 4
+  } else if (total_hours_panels$date[i] == "201805") {
+    total_hours_panels$date_numeric[i] <- 5
+  } else if (total_hours_panels$date[i] == "201806") {
+    total_hours_panels$date_numeric[i] <- 6
+  } else if (total_hours_panels$date[i] == "201807") {
+    total_hours_panels$date_numeric[i] <- 7
+  } else if (total_hours_panels$date[i] == "201808") {
+    total_hours_panels$date_numeric[i] <- 8
+  } else if (total_hours_panels$date[i] == "201809") {
+    total_hours_panels$date_numeric[i] <- 9
+  } else if (total_hours_panels$date[i] == "201810") {
+    total_hours_panels$date_numeric[i] <- 10
+  } else if (total_hours_panels$date[i] == "201811") {
+    total_hours_panels$date_numeric[i] <- 11
+  } else if (total_hours_panels$date[i] == "201812") {
+    total_hours_panels$date_numeric[i] <- 12
+  } else if (total_hours_panels$date[i] == "201901") {
+    total_hours_panels$date_numeric[i] <- 13
+  } else if (total_hours_panels$date[i] == "201902") {
+    total_hours_panels$date_numeric[i] <- 14
+  } else if (total_hours_panels$date[i] == "201903") {
+    total_hours_panels$date_numeric[i] <- 15
+  } else if (total_hours_panels$date[i] == "201904") {
+    total_hours_panels$date_numeric[i] <- 16
+  } else if (total_hours_panels$date[i] == "201905") {
+    total_hours_panels$date_numeric[i] <- 17
+  } else if (total_hours_panels$date[i] == "201906") {
+    total_hours_panels$date_numeric[i] <- 18
+  } else {
+    total_hours_panels$date_numeric[i] <- 19
+  }
+}
+```
+
+
+## Statistical Tests, Profiles
+```{r}
+regress_panels <- total_hours_panels %>% group_by(categories) %>% filter(row_number() == 1:19)
+for (cat in unique(regress_panels$categories)) {
+  print(cat)
+  print(summary(lm(total_hours ~ date_numeric, regress_panels[which(regress_panels$categories == cat),])))
+  print(confint(lm(total_hours ~ date_numeric, regress_panels[which(regress_panels$categories == cat),])))
+}
+
+aov_panels <- total_hours_panels %>% group_by(query) %>%
+  mutate(avg_hours = mean(hours_watched))
+
+aov_panels = aov_panels[!duplicated(aov_panels$query),]
+
+summary(aov(avg_hours ~ categories, data = aov_panels))
+TukeyHSD(aov(avg_hours ~ categories, data = aov_panels))
+  
+
+#Still doesn't converge
+summary(lmer(log(total_hours, base = 10) ~ categories + date_numeric + categories*date_numeric + (1|categories), data = regress_panels))
+
+
+#summary(lmer(total_hours ~ categories + date_numeric + categories*date_numeric + (1|categories/query), data = total_hours_panels))
+#summary(lm(total_hours ~ categories + date_numeric + categories*date_numeric, data = total_hours_panels))
+
+#summary(lmer(total_hours ~ categories + date_numeric + categories*date_numeric + (1|categories), data = total_hours_panels))
+```
+
+## Sum of Hours for each category
+```{r}
+View(total_hours_panels %>% group_by(categories) %>% filter(row_number() == 1:19) %>% summarise(total = sum(total_hours), avg = sum(average_hours)))
+```
+
+## Top 5 in Each Category Plots
+```{r}
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190916_PanelTop5_Snacks.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`snacks_panels top5_aggregate`, Word %in% unique(`snacks_panelstop_average`$query)[1:5]), aes(x = date, y = Aggregate_Hours_Watched, color = query, group = query)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  scale_x_discrete(labels = c("201801" = "1/18", "201802" = "2/18", "201803" = "3/18", "201804" = "4/18", "201805" = "5/18", "201806" = "6/18", "201807" = "7/18", "201808" = "8/18", "201809" = "9/18", "201810" = "10/18", "201811" = "11/18", "201812" = "12/18", "201901" = "1/19", "201902" = "2/19","201903" = "3/19","201904" = "4/19","201905" = "5/19", "201906" = "6/19", "201907" = "7/19")) +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Processed Foods") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma)
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190916_PanelTop5_Snacks_Abridged.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`snacks_panels top5_aggregate`, Word %in% unique(`snacks_panelstop_average`$query)[1:5]), aes(x = date, y = Aggregate_Hours_Watched, color = query, group = query)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  scale_x_discrete(labels = c("201801" = "1/18", "201802" = "2/18", "201803" = "3/18", "201804" = "4/18", "201805" = "5/18", "201806" = "6/18", "201807" = "7/18", "201808" = "8/18", "201809" = "9/18", "201810" = "10/18", "201811" = "11/18", "201812" = "12/18", "201901" = "1/19", "201902" = "2/19","201903" = "3/19","201904" = "4/19","201905" = "5/19", "201906" = "6/19", "201907" = "7/19")) +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Processed Foods") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma, limits = c(0, 500000))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190916_PanelTop5_Restaurants.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`restaurants_panels top5_aggregate`, Word %in% unique(`restaurants_panelstop_average`$query)[1:5]), aes(x = date, y = Aggregate_Hours_Watched, color = query, group = query)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  scale_x_discrete(labels = c("201801" = "1/18", "201802" = "2/18", "201803" = "3/18", "201804" = "4/18", "201805" = "5/18", "201806" = "6/18", "201807" = "7/18", "201808" = "8/18", "201809" = "9/18", "201810" = "10/18", "201811" = "11/18", "201812" = "12/18", "201901" = "1/19", "201902" = "2/19","201903" = "3/19","201904" = "4/19","201905" = "5/19", "201906" = "6/19", "201907" = "7/19")) +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Restaurants and Food Delivery") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma)
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190916_PanelTop5_Restaurants_Abridged.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`restaurants_panels top5_aggregate`, Word %in% unique(`restaurants_panelstop_average`$query)[1:5]), aes(x = date, y = Aggregate_Hours_Watched, color = query, group = query)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  scale_x_discrete(labels = c("201801" = "1/18", "201802" = "2/18", "201803" = "3/18", "201804" = "4/18", "201805" = "5/18", "201806" = "6/18", "201807" = "7/18", "201808" = "8/18", "201809" = "9/18", "201810" = "10/18", "201811" = "11/18", "201812" = "12/18", "201901" = "1/19", "201902" = "2/19","201903" = "3/19","201904" = "4/19","201905" = "5/19", "201906" = "6/19", "201907" = "7/19")) +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Restaurants and Food Delivery") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma, limits = c(0, 500000))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190917_PanelTop5_EnergyDrinks.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`energydrinks_panels top5_aggregate`, Word %in% unique(`energydrinks_panels top5_aggregate`$Word)[1:5]), aes(x = date, y = Aggregate_Hours_Watched, color = query, group = query)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  scale_x_discrete(labels = c("201801" = "1/18", "201802" = "2/18", "201803" = "3/18", "201804" = "4/18", "201805" = "5/18", "201806" = "6/18", "201807" = "7/18", "201808" = "8/18", "201809" = "9/18", "201810" = "10/18", "201811" = "11/18", "201812" = "12/18", "201901" = "1/19", "201902" = "2/19","201903" = "3/19","201904" = "4/19","201905" = "5/19", "201906" = "6/19", "201907" = "7/19")) +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Energy Drinks, Coffee, and Tea") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma)
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190917_PanelTop5_EnergyDrinks_Abridged.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`energydrinks_panels top5_aggregate`, Word %in% unique(`energydrinks_panels top5_aggregate`$Word)[1:5]), aes(x = date, y = Aggregate_Hours_Watched, color = query, group = query)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  scale_x_discrete(labels = c("201801" = "1/18", "201802" = "2/18", "201803" = "3/18", "201804" = "4/18", "201805" = "5/18", "201806" = "6/18", "201807" = "7/18", "201808" = "8/18", "201809" = "9/18", "201810" = "10/18", "201811" = "11/18", "201812" = "12/18", "201901" = "1/19", "201902" = "2/19","201903" = "3/19","201904" = "4/19","201905" = "5/19", "201906" = "6/19", "201907" = "7/19")) +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Energy Drinks, Coffee, and Tea") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma, limits = c(0, 500000))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190916_PanelTop5_Beverages.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`beverages_panels top5_aggregate`, Word %in% unique(`beverages_panelstop_average`$query)[1:5]), aes(x = date, y = Aggregate_Hours_Watched, color = query, group = query)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  scale_x_discrete(labels = c("201801" = "1/18", "201802" = "2/18", "201803" = "3/18", "201804" = "4/18", "201805" = "5/18", "201806" = "6/18", "201807" = "7/18", "201808" = "8/18", "201809" = "9/18", "201810" = "10/18", "201811" = "11/18", "201812" = "12/18", "201901" = "1/19", "201902" = "2/19","201903" = "3/19","201904" = "4/19","201905" = "5/19", "201906" = "6/19", "201907" = "7/19")) +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Sugar-Sweetened Beverages") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma)
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190916_PanelTop5_Beverages_Abridged.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`beverages_panels top5_aggregate`, Word %in% unique(`beverages_panelstop_average`$query)[1:5]), aes(x = date, y = Aggregate_Hours_Watched, color = query, group = query)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  scale_x_discrete(labels = c("201801" = "1/18", "201802" = "2/18", "201803" = "3/18", "201804" = "4/18", "201805" = "5/18", "201806" = "6/18", "201807" = "7/18", "201808" = "8/18", "201809" = "9/18", "201810" = "10/18", "201811" = "11/18", "201812" = "12/18", "201901" = "1/19", "201902" = "2/19","201903" = "3/19","201904" = "4/19","201905" = "5/19", "201906" = "6/19", "201907" = "7/19")) +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Sugar-Sweetened Beverages") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma, limits = c(0, 500000))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190916_PanelTop5_Candies.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`candies_panels top5_aggregate`, Word %in% unique(`candies_panels top5_aggregate`$Word)[1:5]), aes(x = date, y = Aggregate_Hours_Watched, color = query, group = query)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  scale_x_discrete(labels = c("201801" = "1/18", "201802" = "2/18", "201803" = "3/18", "201804" = "4/18", "201805" = "5/18", "201806" = "6/18", "201807" = "7/18", "201808" = "8/18", "201809" = "9/18", "201810" = "10/18", "201811" = "11/18", "201812" = "12/18", "201901" = "1/19", "201902" = "2/19","201903" = "3/19","201904" = "4/19","201905" = "5/19", "201906" = "6/19", "201907" = "7/19")) +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Candies") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma)
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190916_PanelTop5_Candies_Abridged.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`candies_panels top5_aggregate`, Word %in% unique(`candies_panels top5_aggregate`$Word)[1:5]), aes(x = date, y = Aggregate_Hours_Watched, color = query, group = query)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  scale_x_discrete(labels = c("201801" = "1/18", "201802" = "2/18", "201803" = "3/18", "201804" = "4/18", "201805" = "5/18", "201806" = "6/18", "201807" = "7/18", "201808" = "8/18", "201809" = "9/18", "201810" = "10/18", "201811" = "11/18", "201812" = "12/18", "201901" = "1/19", "201902" = "2/19","201903" = "3/19","201904" = "4/19","201905" = "5/19", "201906" = "6/19", "201907" = "7/19")) +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Candies") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma, limits = c(0, 500000))
+dev.off()
+
+```
+
+## Total Hours of Profiles Plot
+```{r} 
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="191024_PanelsTop5.svg", 
+    width=7.75, 
+    height=3, 
+    pointsize=10)
+ggplot(total_hours_panels, 
+       aes(x = date, y = total_hours, color = categories, group = categories)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  xlab("Date") +
+  ylab("Total Hours per Month") +
+  scale_x_discrete(labels = c("201801" = "1/18", "201802" = "2/18", "201803" = "3/18", "201804" = "4/18", "201805" = "5/18", "201806" = "6/18", "201807" = "7/18", "201808" = "8/18", "201809" = "9/18", "201810" = "10/18", "201811" = "11/18", "201812" = "12/18", "201901" = "1/19", "201902" = "2/19","201903" = "3/19","201904" = "4/19","201905" = "5/19", "201906" = "6/19", "201907" = "7/19")) +
+  theme(axis.text.x = element_text(size = 8), 
+        axis.title.x = element_text(size = 11),
+        axis.title.y = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        legend.text = element_text(size = 11),
+        legend.title = element_blank(),
+        legend.position = "bottom") + 
+  guides(color=guide_legend(ncol = 2)) + 
+  scale_color_jama()  +
+  scale_y_continuous(labels = comma, limits = c(0, 90000000))
+dev.off()
+
+```
+
+## Total Hours of Profiles Plot
+```{r} 
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="191023_PanelsTop5_Trends.svg", 
+    width=7.75, 
+    height=3, 
+    pointsize=10)
+ggplot(total_hours_panels, 
+       aes(x = date, y = total_hours, color = categories, group = categories)) +
+  geom_smooth(method = "lm") +
+  theme_minimal() +
+  xlab("Date") +
+  ylab("Total Hours per Month") +
+  scale_x_discrete(labels = c("201801" = "1/18", "201802" = "2/18", "201803" = "3/18", "201804" = "4/18", "201805" = "5/18", "201806" = "6/18", "201807" = "7/18", "201808" = "8/18", "201809" = "9/18", "201810" = "10/18", "201811" = "11/18", "201812" = "12/18", "201901" = "1/19", "201902" = "2/19","201903" = "3/19","201904" = "4/19","201905" = "5/19", "201906" = "6/19", "201907" = "7/19")) +
+  theme(axis.text.x = element_text(size = 8), 
+        axis.title.x = element_text(size = 11),
+        axis.title.y = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        legend.text = element_text(size = 11),
+        legend.title = element_blank(),
+        legend.position = "bottom") + 
+  guides(color=guide_legend(ncol = 2)) + 
+  scale_color_jama()  +
+  scale_y_continuous(labels = comma, limits = c(0, 90000000), oob = squish) 
+dev.off()
+````
+
+# Part 3. Stream Titles
+## Remove words that were found to not work for stream titles and add word column that matches the formatting of the chat data set and change spellings accordingly
+```{r}
+remove_words <- c("B&G Foods", "B&GFoods", "BandGFoods", "Kellogg", "Kelloggs", "Kellogg's", "Keebler", "Smuckers", "A&W", "AandW", "NoDos", "NoDoz", "Apple & Eve", "Apple&Eve", "AppleandEve", "Nestle")
+dat_titles <- filter(dat_titles, !(Word %in% remove_words))
+
+dat_titles$Word <- dat_titles$Word %>%
+  str_replace_all(c("-" = "", "'" = "", "z" = "s", "&" = "and", " " = "", "’" = "", "ó" = "o", 
+                    "ArisonaTea" = "ArisonaIcedTea", 
+                    "Chickfil-A" = "ChickfilA", 
+                    "CocaCola" = "Coke", 
+                    "McDs" = "McDonalds", 
+                    "MtnDew" = "MountainDew", 
+                    "Oreos" = "Oreo", 
+                    "Twisslers" = "Twiszlers", 
+                    "Ubr" = "Ubereats", 
+                    "Kelloggs" = "Kellogg", 
+                    "Gfuel" = "GamerFuel", 
+                    "AMPEnergy" = "MountainDew",
+                    "GameFuel" = "MountainDew")) #Removes hyphen or apostraphe
+```
+
+## Merge categories with panels list
+```{r}
+dat_titles$categories <- "" #Initialize category column in panels data set
+brands$Word <- as.character(brands$Word)
+dat_titles$Word <- as.character(dat_titles$Word)
+brands$category <- as.character(brands$category)
+
+for (i in 1:nrow(dat_titles)) { #For each panel search term
+  dat_titles$categories[i] <- ifelse(dat_titles$Word[i] %in% brands$Word, brands$category[which(brands$Word %in% dat_titles$Word[i])[1]], "") #If the word in the panel is in the brand_categories list, pull the list and assign it. 
+}
+
+```
+
+## Remove any rows where no data exists
+```{r}
+dat_titles <- filter(dat_titles, Date != "None")
+```
+
+## Split Category for Dates
+```{r}
+dat_titles <- separate(dat_titles,
+                                 col = "Date",
+                                 into = c("Twitch", "Date"),
+                                 sep = "     ")
+```
+
+## Remove column that gives platform (all are Twitch) and any extra blank space
+```{r}
+dat_titles <- separate(dat_titles,
+                                 col = "Date",
+                                 into = c("Date", "Blank"),
+                                 sep = "    ")
+
+dat_titles <- select(dat_titles, -Twitch, -Blank)
+```
+
+## Change character to date and reformat
+```{r}
+dat_titles$Date <- as.Date(dat_titles$Date)
+dat_titles$Date <- format(dat_titles$Date, "%m/%y")
+dat_titles <- filter(dat_titles, is.na(Date) == FALSE)
+```
+
+## Count brands by dates
+```{r}
+dat_titles$Hours.Watched <- dat_titles$Hours.Watched %>%
+  as.character(.) %>%
+  str_replace_all(., ",", "")
+
+dat_titles_aggregate <- dat_titles %>%
+  group_by(Word, Date) %>%
+  mutate(Channels = n(),
+         Total_Hours = sum(as.numeric(Hours.Watched))) %>%
+  distinct(Word, .keep_all = TRUE)
+```
+
+## Extract individual categories
+```{r}
+snacks_titles <- filter(dat_titles_aggregate, categories == "Processed Snacks")
+beverages_titles <- filter(dat_titles_aggregate, categories == "Sugar-Sweetened Beverages")
+restaurants_titles <- filter(dat_titles_aggregate, categories == "Restaurants")
+candies_titles <- filter(dat_titles_aggregate, categories == "Candies")
+energydrinks_titles <- filter(dat_titles_aggregate, categories == "Caffeinated and Energy Drinks")
+```
+
+## Top Five in Each Category by Hours Watched
+```{r}
+categories <- c("snacks_titles", "beverages_titles", "restaurants_titles", "candies_titles", "energydrinks_titles")
+
+for (i in categories) { #For each category listed above
+  if (i == "ecigarettes_titles") {
+    temp <- get(i) %>% #Pull the actual category
+      arrange(Date, desc(Total_Hours)) %>% #Pull aggregated hours watched in descending order
+      select(Word, Date, Channels, Total_Hours) #Only pull columns interested in
+    assign(paste(i, "top5", sep = ""), temp) #Send back out 
+  } else {
+    temp <- get(i) %>% #Pull the actual category
+      arrange(Date, desc(Total_Hours)) %>% #Pull aggregated hours watched in descending order
+      group_by(as.character(Date)) %>%
+      filter(row_number() == 1:5) %>%
+      select(Word, Date, Channels, Total_Hours) #Only pull columns interested in
+    assign(paste(i, "top5", sep = ""), temp) #Send back out 
+  }
+}
+```
+
+## Average and Total Hours Per Month in Each Category
+```{r}
+for (i in categories) {
+  temp <- get(i) %>%
+    group_by(Date) %>%
+    summarise("Number_of_Brands" = n(),
+              "Total_Hours" = round(sum(Total_Hours, na.rm = TRUE),0),
+              "Total_Channels" = round(sum(Channels, na.rm = TRUE),0),
+              "Average_Hours" = round(
+                sum(Total_Hours,na.rm = TRUE)/length(unique(get(i)$Word)), 0))
+  temp$cat <- i
+  assign(paste(i, "_total_hours", sep = ""), temp)
+
+}
+
+total_hours_titles <- snacks_titles_total_hours
+for (i in categories[2:length(categories)]) {
+  total_hours_titles <- rbind(total_hours_titles, get(paste(i, "_total_hours", sep = "")))
+}
+
+## Sum of Hours for each category
+View(total_hours_titles %>% group_by(cat) %>% summarise(total = sum(Total_Hours), avg = sum(Average_Hours)))
+```
+
+
+## Percent Increase Titles
+```{r}
+#Processed Snacks
+(93180-13306)/13306 #600% increase
+
+#Beverages
+(261544-32227)/32227 #712% increase
+
+#Restaurants
+(159181-15840)/15840 #905% increase
+
+#Candies
+(137966-24512)/24512 #463%
+
+# Energy Drinks
+(3961945-1196757)/1196757 #231% increase
+
+#Alcohol
+(24626-17695)/17695 #39% increase
+
+#ECigarettes
+(4401-12620)/12620 #65% decrease
+```
+
+
+## Pull all data points for brands that occur in top five
+```{r}
+categories <- c("snacks_titles", "beverages_titles", "restaurants_titles", "candies_titles", "energydrinks_titles")
+dates <- c("01/18", "02/18" , "03/18", "04/18", "05/18", "06/18", "07/18", "08/18", "09/18", "10/18", "11/18", "12/18", "01/19", "02/19", "03/19", "04/19", "05/19",  "06/19", "07/19")
+
+for (i in categories) { #For each category listed above
+  temp <- get(i) %>% #Pull the actual category
+    filter(Word %in% unique(as.character(get(paste(i, "top5", sep = ""))$Word))) %>%
+    select(Word, categories, Channels, Total_Hours, Date) #Only pull columns interested in
+  temp$Date <- factor(temp$Date, levels = c("01/18", "02/18" , "03/18", "04/18", "05/18", "06/18", "07/18", "08/18", "09/18", "10/18", "11/18", "12/18", "01/19", "02/19", "03/19", "04/19", "05/19",  "06/19", "07/19"))
+  temp <- as.data.frame(temp)
+  for (brand in unique(temp$Word)) {
+    if (length(which(dates %in% filter(temp, Word == brand)$Date)) == 19) {
+      print("No mismatched dates")
+    } else {
+      print("Mismatched dates!")
+      for (date in which(!(dates %in% filter(temp, Word == brand)$Date))) {
+        holder <- c(brand, temp[1,2], 0, 0, dates[date])
+        names(holder) <- colnames(temp)
+        holder <- t(holder)
+        holder <- as.data.frame(holder, stringsAsFactors = FALSE)
+        holder$Channels <- as.numeric(holder$Channels)
+        holder$Total_Hours <- as.numeric(holder$Total_Hours)
+        temp <- rbind(temp, holder)
+      }
+    }
+  }
+  assign(paste(i, "top5_aggregate"), temp) #Send back out 
+  
+  temp2 <- temp %>%
+    group_by(Word) %>%
+    summarise("Total Aggregate Hours" = sum(Total_Hours),
+              "Average Hours Watched" = sum(Total_Hours)/18)
+  assign(paste(i, "top_average", sep = ""), temp2)
+}
+```
+
+## Rename variables for top 5
+```{r}
+`snacks_titles top5_aggregate`[which(`snacks_titles top5_aggregate`$Word == "NatureValley"), "Word"] <- "Nature Valley"
+
+`snacks_titles top5_aggregate`[which(`snacks_titles top5_aggregate`$Word == "CheesIt"), "Word"] <- "Cheez-Its"
+
+`snacks_titles top5_aggregate`[which(`snacks_titles top5_aggregate`$Word == "ChipsAhoy"), "Word"] <- "Chips Ahoy"
+
+`snacks_titles top5_aggregate`[which(`snacks_titles top5_aggregate`$Word == "LittleDebbie"), "Word"] <- "Little Debbie"
+
+`snacks_titles top5_aggregate`[which(`snacks_titles top5_aggregate`$Word == "PepperidgeFarm"), "Word"] <- "Pepperidge Farm"
+
+`snacks_titles top5_aggregate`[which(`snacks_titles top5_aggregate`$Word == "PopTarts"), "Word"] <- "Pop-Tarts"
+
+`snacks_titles top5_aggregate`[which(`snacks_titles top5_aggregate`$Word == "SlimJim"), "Word"] <- "Slim Jim"
+
+`snacks_titles top5_aggregate`[which(`snacks_titles top5_aggregate`$Word == "Lays"), "Word"] <- "Lay's"
+
+`restaurants_titles top5_aggregate`[which(`restaurants_titles top5_aggregate`$Word == "BurgerKing"), "Word"] <- "Burger King"
+
+`restaurants_titles top5_aggregate`[which(`restaurants_titles top5_aggregate`$Word == "Ubereats"), "Word"] <- "UberEats"
+
+`restaurants_titles top5_aggregate`[which(`restaurants_titles top5_aggregate`$Word == "PissaHut"), "Word"] <- "Pizza Hut"
+
+`restaurants_titles top5_aggregate`[which(`restaurants_titles top5_aggregate`$Word == "TacoBell"), "Word"] <- "Taco Bell"
+
+`restaurants_titles top5_aggregate`[which(`restaurants_titles top5_aggregate`$Word == "ChickfilA"), "Word"] <- "Chick-fil-A"
+
+`restaurants_titles top5_aggregate`[which(`restaurants_titles top5_aggregate`$Word == "Wendys"), "Word"] <- "Wendy's"
+
+`restaurants_titles top5_aggregate`[which(`restaurants_titles top5_aggregate`$Word == "Quisnos"), "Word"] <- "Quiznos"
+
+`restaurants_titles top5_aggregate`[which(`restaurants_titles top5_aggregate`$Word == "Dominos"), "Word"] <- "Domino's"
+
+`restaurants_titles top5_aggregate`[which(`restaurants_titles top5_aggregate`$Word == "DairyQueen"), "Word"] <- "Dairy Queen"
+
+`restaurants_titles top5_aggregate`[which(`restaurants_titles top5_aggregate`$Word == "LittleCaesars"), "Word"] <- "Little Caesars"
+
+`candies_titles top5_aggregate`[which(`candies_titles top5_aggregate`$Word == "Reeses"), "Word"] <- "Reese's"
+
+`candies_titles top5_aggregate`[which(`candies_titles top5_aggregate`$Word == "Hersheys"), "Word"] <- "Hershey's"
+
+`candies_titles top5_aggregate`[which(`candies_titles top5_aggregate`$Word == "KitKat"), "Word"] <- "Kit-Kat"
+
+`candies_titles top5_aggregate`[which(`candies_titles top5_aggregate`$Word == "FerreroRocher"), "Word"] <- "Ferrero Rocher"
+
+`candies_titles top5_aggregate`[which(`candies_titles top5_aggregate`$Word == "Twiszlers"), "Word"] <- "Twizzlers"
+
+`candies_titles top5_aggregate`[which(`candies_titles top5_aggregate`$Word == "SwedishFish"), "Word"] <- "Swedish Fish"
+
+`candies_titles top5_aggregate`[which(`candies_titles top5_aggregate`$Word == "3Musketeers"), "Word"] <- "3 Musketeers"
+
+`beverages_titles top5_aggregate`[which(`beverages_titles top5_aggregate`$Word == "Coke"), "Word"] <- "Coca-Cola"
+
+`beverages_titles top5_aggregate`[which(`beverages_titles top5_aggregate`$Word == "KoolAid"), "Word"] <- "Kool-Aid"
+
+`beverages_titles top5_aggregate`[which(`beverages_titles top5_aggregate`$Word == "DrPepper"), "Word"] <- "Dr. Pepper"
+
+`beverages_titles top5_aggregate`[which(`beverages_titles top5_aggregate`$Word == "CapriSun"), "Word"] <- "Capri Sun"
+
+`beverages_titles top5_aggregate`[which(`beverages_titles top5_aggregate`$Word == "Coke"), "Word"] <- "Coca-Cola"
+
+`energydrinks_titles top5_aggregate`[which(`energydrinks_titles top5_aggregate`$Word == "GamerFuel"), "Word"] <- "Gamer Fuel"
+
+`energydrinks_titles top5_aggregate`[which(`energydrinks_titles top5_aggregate`$Word == "RedBull"), "Word"] <- "Red Bull"
+
+`energydrinks_titles top5_aggregate`[which(`energydrinks_titles top5_aggregate`$Word == "MountainDew"), "Word"] <- "Mountain Dew"
+
+`energydrinks_titles top5_aggregate`[which(`energydrinks_titles top5_aggregate`$Word == "MadrinasCoffee"), "Word"] <- "Madrinas Coffee"
+
+`energydrinks_titles top5_aggregate`[which(`energydrinks_titles top5_aggregate`$Word == "FullThrottle"), "Word"] <- "Full Throttle"
+
+`energydrinks_titles top5_aggregate`[which(`energydrinks_titles top5_aggregate`$Word == "5hourEnergy"), "Word"] <- "5-hour Energy"
+
+`energydrinks_titles top5_aggregate`[which(`energydrinks_titles top5_aggregate`$Word == "TornadoEnergy"), "Word"] <- "Tornado Energy"
+
+`energydrinks_titles top5_aggregate`[which(`energydrinks_titles top5_aggregate`$Word == "MonsterEnergy"), "Word"] <- "Monster Energy"
+
+`energydrinks_titles top5_aggregate`[which(`energydrinks_titles top5_aggregate`$Word == "NOSenergy"), "Word"] <- "NOS Energy"
+
+`energydrinks_titles top5_aggregate`[which(`energydrinks_titles top5_aggregate`$Word == "RockstarEnergy"), "Word"] <- "Rockstar Energy"
+
+```
+
+## Relevel factor so colors go from most hours to least hours
+```{r}
+`snacks_titles top5_aggregate`$Word <- as.factor(`snacks_titles top5_aggregate`$Word)
+`snacks_titles top5_aggregate`$Word <- droplevels(`snacks_titles top5_aggregate`$Word)
+`snacks_titles top5_aggregate`$Word <- factor(`snacks_titles top5_aggregate`$Word, levels = c("Totinos", "Doritos", "Nutella", "Oreo", "Chex", "Pringles", "Lay's", "Chips Ahoy", "Cheetos", "Pop-Tarts", "Pepperidge Farm", "Little Debbie", "Slim Jim", "Nature Valley", "Cheez-Its", "Fritos", "Triscuit"))
+
+`restaurants_titles top5_aggregate`$Word <-as.factor(`restaurants_titles top5_aggregate`$Word)
+`restaurants_titles top5_aggregate`$Word <- droplevels(`restaurants_titles top5_aggregate`$Word)
+`restaurants_titles top5_aggregate`$Word <- factor(`restaurants_titles top5_aggregate`$Word, levels = c("GrubHub", "Burger King", "KFC", "Chipotle", "UberEats", "Starbucks", "Subway", "Pizza Hut", "Taco Bell", "Chick-fil-A", "Quiznos", "Wendy's", "Domino's", "Popeyes", "Dairy Queen", "Little Caesars"))
+
+`candies_titles top5_aggregate`$Word <- as.factor(`candies_titles top5_aggregate`$Word)
+`candies_titles top5_aggregate`$Word <- droplevels(`candies_titles top5_aggregate`$Word)
+`candies_titles top5_aggregate`$Word <- factor(`candies_titles top5_aggregate`$Word, levels = c("Reese's", "Snickers", "Hershey's", "Skittles", "Kit-Kat", "Twix", "Butterfinger", "Ferrero Rocher", "Twizzlers", "Swedish Fish", "3 Musketeers"))
+
+`beverages_titles top5_aggregate`$Word <- as.factor(`beverages_titles top5_aggregate`$Word)
+`beverages_titles top5_aggregate`$Word <- droplevels(`beverages_titles top5_aggregate`$Word)
+`beverages_titles top5_aggregate`$Word <- factor(`beverages_titles top5_aggregate`$Word, levels = c("Coca-Cola", "Pepsi", "Kool-Aid", "Fanta", "Dr. Pepper", "Gatorade", "Snapple", "Capri Sun", "Tropicana", "Powerade", "Schweppes", "Faygo", "Vernors"))
+
+`energydrinks_titles top5_aggregate`$Word <- as.factor(`energydrinks_titles top5_aggregate`$Word)
+`energydrinks_titles top5_aggregate`$Word <- droplevels(`energydrinks_titles top5_aggregate`$Word)
+`energydrinks_titles top5_aggregate`$Word <- factor(`energydrinks_titles top5_aggregate`$Word, levels = c("Gamer Fuel", "Red Bull", "Mountain Dew", "Madrinas Coffee", "Full Throttle", "5-hour Energy", "Tornado Energy", "Monster Energy", "NOS Energy", "Rockstar Energy"))
+```
+
+## Rename Categories
+```{r}
+total_hours_titles[which(total_hours_titles$cat == "snacks_titles"), "cat"] <- "Processed Snacks"
+
+total_hours_titles[which(total_hours_titles$cat == "beverages_titles"), "cat"] <- "Sodas and Other Sugar Sweetened Beverages"
+
+total_hours_titles[which(total_hours_titles$cat == "restaurants_titles"), "cat"] <- "Restaurants and Food Delivery Services"
+
+total_hours_titles[which(total_hours_titles$cat == "candies_titles"), "cat"] <- "Candies"
+
+total_hours_titles[which(total_hours_titles$cat == "energydrinks_titles"), "cat"] <- "Energy Drinks, Coffees, and Teas"
+
+total_hours_titles$cat <- factor(total_hours_titles$cat, levels = c("Energy Drinks, Coffees, and Teas", "Restaurants and Food Delivery Services", "Processed Snacks", "Sodas and Other Sugar Sweetened Beverages", "Candies"))
+
+```
+
+## Relevel Date for plot
+```{r}
+total_hours_titles$Date <- factor(total_hours_titles$Date, levels = c("01/18", "02/18" , "03/18", "04/18", "05/18", "06/18", "07/18", "08/18", "09/18", "10/18", "11/18", "12/18", "01/19", "02/19", "03/19", "04/19", "05/19",  "06/19", "07/19"  ))
+```
+
+## Top 5 in Each Category Plots
+```{r}
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190819_TitlesTop5_Snacks.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`snacks_titles top5_aggregate`, Word %in% levels(`snacks_titles top5_aggregate`$Word)[1:5]),
+            aes(x = Date, y = Total_Hours, color = Word, group = Word)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Processed Foods") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma)
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190819_TitlesTop5_Snacks_Abridged.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`snacks_titles top5_aggregate`, Word %in% levels(`snacks_titles top5_aggregate`$Word)[1:5]),
+            aes(x = Date, y = Total_Hours, color = Word, group = Word)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Processed Foods") +
+  scale_color_jama()  +
+  scale_y_continuous(labels = comma, limits = c(0, 500000))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190819_TitlesTop5_Restaurants.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`restaurants_titles top5_aggregate`, Word %in% levels(`restaurants_titles top5_aggregate`$Word)[1:5]), 
+            aes(x = Date, y = Total_Hours, color = Word, group = Word)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Restaurants and Food Delivery") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma)
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190819_TitlesTop5_Restaurants_Abridged.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`restaurants_titles top5_aggregate`, Word %in% levels(`restaurants_titles top5_aggregate`$Word)[1:5]), 
+            aes(x = Date, y = Total_Hours, color = Word, group = Word)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Restaurants and Food Delivery") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma, limits = c(0, 500000))
+dev.off()
+
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190819_TitlesTop5_Candies.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`candies_titles top5_aggregate`, Word %in% levels(`candies_titles top5_aggregate`$Word)[1:5]), 
+            aes(x = Date, y = Total_Hours, color = Word, group = Word)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Candies") +
+  scale_color_jama() +
+  scale_y_continuous(labels = comma)
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190819_TitlesTop5_Beverages.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`beverages_titles top5_aggregate`, Word %in% levels(`beverages_titles top5_aggregate`$Word)[1:5]), 
+            aes(x = Date, y = Total_Hours, color = Word, group = Word)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Sugar-Sweetened Beverages") +
+  scale_color_jama()  +
+  scale_y_continuous(labels = comma)
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190819_TitlesTop5_Beverages_Abridged.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`beverages_titles top5_aggregate`, Word %in% levels(`beverages_titles top5_aggregate`$Word)[1:5]), 
+            aes(x = Date, y = Total_Hours, color = Word, group = Word)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Sugar-Sweetened Beverages") +
+  scale_color_jama()  +
+  scale_y_continuous(labels = comma, limits = c(0, 500000))
+dev.off()
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190819_TitlesTop5_EnergyDrinks.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`energydrinks_titles top5_aggregate`, Word %in% levels(`energydrinks_titles top5_aggregate`$Word)[1:5]), 
+            aes(x = Date, y = Total_Hours, color = Word, group = Word)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Energy Drinks, Coffee, and Tea") +
+  scale_color_jama()  +
+  scale_y_continuous(labels = comma)
+dev.off()
+
+
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="190819_TitlesTop5_EnergyDrinks_Abridged.svg", 
+    width=3.25, 
+    height=2, 
+    pointsize=8)
+ggplot(filter(`energydrinks_titles top5_aggregate`, Word %in% levels(`energydrinks_titles top5_aggregate`$Word)[1:5]), 
+            aes(x = Date, y = Total_Hours, color = Word, group = Word)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "bottom") +
+  guides(color=guide_legend(nrow = 2)) +
+  xlab("Date (Month/Year)") +
+  ylab("Hours Viewed per Month") +
+  ggtitle("Energy Drinks, Coffee, and Tea") +
+  scale_color_jama()  +
+  scale_y_continuous(labels = comma, limits = c(0, 500000))
+dev.off()
+
+```
+
+## Total Hours of Titles Plot
+```{r} 
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="191024_TitlesTop5.svg", 
+    width=7.75, 
+    height=3, 
+    pointsize=10)
+ggplot(total_hours_titles, 
+       aes(x = Date, y = Total_Hours, color = cat, group = cat)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  xlab("Date") +
+  ylab("Total Hours per Month") +
+  theme(axis.text.x = element_text(size = 8), 
+        axis.title.x = element_text(size = 11),
+        axis.title.y = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        legend.text = element_text(size = 11),
+        legend.title = element_blank(),
+        legend.position = "bottom") + 
+  guides(color=guide_legend(ncol = 2)) + 
+  scale_color_jama()  +
+  scale_y_continuous(labels = comma, limits = c(0, 12500000))
+dev.off()
+```
+
+## Total Hours of Titles Plot
+```{r} 
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+svg(filename="191024_TitlesTop5_TrendLines.svg", 
+    width=7.75, 
+    height=3, 
+    pointsize=10)
+ggplot(total_hours_titles, 
+       aes(x = Date, y = Total_Hours, color = cat, group = cat)) +
+  geom_smooth(method = "lm") + 
+  theme_minimal() +
+  xlab("Date") +
+  ylab("Total Hours per Month") +
+  theme(axis.text.x = element_text(size = 8), 
+        axis.title.x = element_text(size = 11),
+        axis.title.y = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        legend.text = element_text(size = 11),
+        legend.title = element_blank(),
+        legend.position = "bottom") + 
+  guides(color=guide_legend(ncol = 2)) + 
+  scale_color_jama()  +
+  scale_y_continuous(labels = comma, limits = c(-100000, 12500000), oob = squish)
+dev.off()
+```
+
+## Full Data Set for Statistics
+```{r}
+total_hours_titles2 <- snacks_titles
+for (i in categories[2:length(categories)]) {
+  total_hours_titles2 <- rbind(total_hours_titles2, get(i))
+}
+
+total_hours_titles2 %<>%
+  group_by(categories, Date) %>%
+  mutate(total_hours = sum(Total_Hours, na.rm = TRUE),
+            average_hours = mean(Total_Hours, na.rm = TRUE))
+
+total_hours_titles2$categories_factor <- as.factor(total_hours_titles2$categories)
+
+total_hours_titles2$categories_factor <- factor(total_hours_titles2$categories_factor, levels = c("Caffeinated and Energy Drinks", "Restaurants", "Processed Snacks", "Sugar-Sweetened Beverages", "Candies"))
+
+
+```
+
+## Date Numeric for Analysis
+```{r}
+total_hours_titles2$Date <- factor(total_hours_titles2$Date, levels = c("01/18", "02/18" , "03/18", "04/18", "05/18", "06/18", "07/18", "08/18", "09/18", "10/18", "11/18", "12/18", "01/19", "02/19", "03/19", "04/19", "05/19",  "06/19", "07/19"  ))
+total_hours_titles2$date_numeric <- as.numeric(total_hours_titles2$Date)
+```
+
+## Statistical Tests, Titles
+```{r}
+regress_titles <- ungroup(total_hours_titles2) %>% 
+  group_by(categories) %>% 
+  select(categories, date_numeric, total_hours) %>%
+  distinct(.)
+
+for (cat in unique(regress_titles$categories)) {
+  print(cat)
+  print(summary(lm(total_hours ~ date_numeric, regress_titles[which(regress_titles$categories == cat),])))
+  print(confint(lm(total_hours ~ date_numeric, regress_titles[which(regress_titles$categories == cat),])))
+}
+
+aov_titles <- total_hours_titles2 %>% group_by(Word) %>%
+  mutate(avg_hours = mean(total_hours))
+
+aov_titles = aov_titles[!duplicated(aov_titles$avg_hours),]
+  
+summary(aov(avg_hours ~ categories, data = aov_titles))
+TukeyHSD(aov(avg_hours ~ categories, data = aov_titles))
+
+````
