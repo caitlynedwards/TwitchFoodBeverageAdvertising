@@ -1,7 +1,7 @@
 ---
 title: "Twitch Analysis"
 author: "Last Updated by: Catherine Pollack"
-date: "Last Updated: 10/23/2019"
+date: "Last Updated: 10/25/2019"
 output: pdf_document
 ---
 
