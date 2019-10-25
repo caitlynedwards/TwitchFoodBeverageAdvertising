@@ -1096,7 +1096,7 @@ ggplot(total_hours_panels,
   scale_color_jama()  +
   scale_y_continuous(labels = comma, limits = c(0, 90000000), oob = squish) 
 dev.off()
-````
+```
 
 # Part 3. Stream Titles
 ## Remove words that were found to not work for stream titles and add word column that matches the formatting of the chat data set and change spellings accordingly
