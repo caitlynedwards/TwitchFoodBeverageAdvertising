@@ -169,6 +169,45 @@ dat_aggregate_total$categories_factor <- factor(dat_aggregate_total$categories_f
 
 ```
 
+## Figures for PHN
+```{r}
+setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
+a <- ggplot(data = dat_aggregate_total, aes(x = reorder(categories_factor, -total_messages), y = total_messages, fill = categories_factor)) +
+  geom_bar(stat = "identity", add = "mean_se") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 6), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "none") +
+  scale_y_continuous(labels = comma) +
+  xlab("Categories") +
+  ylab("Total Message Counts for July 2019") +
+  scale_fill_jama()
+
+ggsave("Masterson_Figure4.tiff", a, dpi = 600, width=5.75, height=2.25)
+
+b <- ggplot(data = dat_aggregate_total, aes(x = reorder(categories_factor, -total_views), y = total_views, fill = categories_factor)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5), 
+        plot.title = element_text(size = 7.5),
+        axis.title.x = element_text(size = 7.5),
+        axis.title.y = element_text(size = 7),
+        axis.text.y = element_text(size = 7.5),
+        legend.position = "none") +
+  scale_y_continuous(labels = comma) +
+  xlab("Categories") +
+  ylab("Total Views for July 2019") +
+  scale_fill_jama()
+
+ggsave("Masterson_Figure5.tiff", b, dpi = 600, width=5.75, height=2.25)
+
+
+```
+
+
 ## Aggregate Figures
 ```{r}
 setwd("~/Documents/Dartmouth/Research/Twitch/Figures")
